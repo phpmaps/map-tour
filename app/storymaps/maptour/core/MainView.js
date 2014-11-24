@@ -1,4 +1,8 @@
-define(["storymaps/maptour/core/WebApplicationData",
+define(["esri/symbols/SimpleMarkerSymbol",
+        "esri/renderers/SimpleRenderer",
+        "dojo/_base/json",
+        "esri/symbols/PictureMarkerSymbol",
+        "storymaps/maptour/core/WebApplicationData",
 		"storymaps/maptour/core/TourPointAttributes",
 		"storymaps/maptour/core/FeatureServiceManager",
 		"storymaps/maptour/core/MapTourHelper",
@@ -29,6 +33,10 @@ define(["storymaps/maptour/core/WebApplicationData",
 		"dojo/query",
 		"dojo/dom-geometry"], 
 	function (
+		SimpleMarkerSymbol,
+		SimpleRenderer,
+		dojoJson,
+		PictureMarkerSymbol,
 		WebApplicationData, 
 		TourPointAttributes,
 		FeatureServiceManager, 
@@ -388,24 +396,38 @@ define(["storymaps/maptour/core/WebApplicationData",
 		
 					// Create a graphics layer for Map Tour data
 					var tourLayer = new GraphicsLayer({ id: 'mapTourGraphics' });
-		
-					// Add ALL graphics to the layer (include hiddens that can become visible)
-					var allTourPoints = app.data.getTourPoints(true);
-					$(allTourPoints).each(function(index, graphic) {
-						tourLayer.add(graphic);
-					});
+
 					
-					// Create a unique value renderer based on the ID field
-					var renderer = new UniqueValueRenderer(null, app.data.getFeatureIDField());
-					
-					//  Add renderer values
-					$(tourPoints).each(function(index, graphic) {
-						renderer.addValue({
-							value:  graphic.attributes.getID(),
-							symbol: MapTourHelper.getSymbol(graphic.attributes.getColor(), index + 1)
+					if(APPCFG.USE_WEB_MAP_MARKER_SYMBOLS){
+						//Get the current web map symbology
+						var symbol = getSymbolFromWebMap();
+						
+						var allTourPoints = app.data.getTourPoints(true);
+						
+					    //  Add renderer values
+						$(allTourPoints).each(function(index, graphic) {
+							graphic.symbol = symbol;
+							tourLayer.add(graphic);
 						});
-					});
-		
+					}else{
+						// Add ALL graphics to the layer (include hiddens that can become visible)
+						var allTourPoints = app.data.getTourPoints(true);
+						$(allTourPoints).each(function(index, graphic) {
+							tourLayer.add(graphic);
+						});
+						
+						// Create a unique value renderer based on the ID field
+						var renderer = new UniqueValueRenderer(null, app.data.getFeatureIDField());
+								
+						//  Add renderer values
+						$(tourPoints).each(function(index, graphic) {
+							renderer.addValue({
+								value:  graphic.attributes.getID(),
+								symbol: MapTourHelper.getSymbol(graphic.attributes.getColor(), index + 1)
+							});
+						});				
+					}
+
 					// Assign the renderer and add the layer
 					tourLayer.setRenderer(renderer);
 					app.map.addLayer(tourLayer);
@@ -499,6 +521,27 @@ define(["storymaps/maptour/core/WebApplicationData",
 				if( ! app.data.getTourPoints().length )
 					selectedPointChange_afterStep2();
 			};
+			
+			function getSymbolFromWebMap()
+			{
+				console.log("inside get Symbol from web map");
+				console.log(app.data.getWebMapItem().item);
+				var symbol = null;
+				var drawingInfo = app.data.getWebMapItem().itemData.operationalLayers[0].featureCollection.layers[0].layerDefinition.drawingInfo;
+				switch(drawingInfo.renderer.symbol.type) {
+				    case "esriPMS":
+				    		symbol = new PictureMarkerSymbol(drawingInfo.renderer.symbol);
+				        break;
+				    case "esriSMS":
+				        symbol = new SimpleMarkerSymbol(drawingInfo.renderer.symbol);
+				        break;
+				    default:
+				    		symbol = new PictureMarkerSymbol(drawingInfo.renderer.symbol);
+				}
+				console.log("inside getSymbolFromWebMap ran");
+				console.log(symbol);
+				return symbol;
+			}
 			
 			function initUI()
 			{
@@ -971,9 +1014,35 @@ define(["storymaps/maptour/core/WebApplicationData",
 				if (app.isInBuilderMode && app.data.sourceIsEditable())
 					app.builder.updateBuilderMoveable(graphic);
 			}
+
+			function enlargeSelectedSymbol(graphic)
+			{
+				app.map.graphics.clear();			
+				
+				var point = new Point(graphic.geometry.x, graphic.geometry.y, graphic.geometry.spatialReference);			
+				
+				var symbol = getSymbolFromWebMap();
+				if(symbol.type == "simplemarkersymbol"){
+					symbol.size = symbol.size * 1.5;
+				}else if(symbol.type == "picturemarkersymbol"){
+					symbol.height = symbol.height * 1.8;
+					symbol.width = symbol.width * 1.8;
+				}
+				
+				app.map.centerAt(point);
+				var g = new Graphic(point,symbol);
+				app.map.graphics.add(g);			
+			}
 			
 			function updateGraphicIcon(graphic, type)
 			{
+				if(APPCFG.USE_WEB_MAP_MARKER_SYMBOLS){
+					console.log("inside updateGraphic 1");
+					console.log(graphic);
+					enlargeSelectedSymbol(graphic);
+					return;
+				}
+				
 				if( ! graphic )
 					return;
 	
@@ -1021,23 +1090,41 @@ define(["storymaps/maptour/core/WebApplicationData",
 				if( app.isInBuilderMode ){
 					if( app.data.sourceIsEditable() )
 						app.builder.createPinPopup(graphic, app.data.getCurrentIndex(), ! MapTourHelper.isOnMobileView());
+				}else{
+					if(APPCFG.USE_WEB_MAP_MARKER_SYMBOLS){
+						app.mapTips = new MultiTips({
+							map: app.map,
+							content: graphic.attributes.getName(),
+							pointArray: [graphic],
+							labelDirection: "auto",
+							backgroundColor: APPCFG.POPUP_BACKGROUND_COLOR,
+							borderColor: APPCFG.POPUP_BORDER_COLOR,
+							pointerColor: APPCFG.POPUP_ARROW_COLOR,
+							textColor: "#ffffff",
+							topLeftNotAuthorizedArea: has('touch') ? [40, 180] : [30, 150],
+							mapAuthorizedWidth: MapTourHelper.isModernLayout() ? domQuery("#picturePanel").position()[0].x : -1,
+							mapAuthorizedHeight: MapTourHelper.isModernLayout() ? domQuery("#footerDesktop").position()[0].y - domQuery("#header").position()[0].h : -1,
+							visible: ! MapTourHelper.isOnMobileView() && graphic.attributes.getName() !== ""
+						});
+					}else{
+						app.mapTips = new MultiTips({
+							map: app.map,
+							content: graphic.attributes.getName(),
+							pointArray: [graphic],
+							labelDirection: "auto",
+							backgroundColor: APPCFG.POPUP_BACKGROUND_COLOR,
+							borderColor: APPCFG.POPUP_BORDER_COLOR,
+							pointerColor: APPCFG.POPUP_ARROW_COLOR,
+							textColor: "#ffffff",
+							offsetTop: app.data.getTourLayer().renderer.getSymbol(graphic).height / 2 + app.data.getTourLayer().renderer.getSymbol(graphic).yoffset,
+							topLeftNotAuthorizedArea: has('touch') ? [40, 180] : [30, 150],
+							mapAuthorizedWidth: MapTourHelper.isModernLayout() ? domQuery("#picturePanel").position()[0].x : -1,
+							mapAuthorizedHeight: MapTourHelper.isModernLayout() ? domQuery("#footerDesktop").position()[0].y - domQuery("#header").position()[0].h : -1,
+							visible: ! MapTourHelper.isOnMobileView() && graphic.attributes.getName() !== ""
+						});
+						
+					}
 				}
-				else 
-					app.mapTips = new MultiTips({
-						map: app.map,
-						content: graphic.attributes.getName(),
-						pointArray: [graphic],
-						labelDirection: "auto",
-						backgroundColor: APPCFG.POPUP_BACKGROUND_COLOR,
-						borderColor: APPCFG.POPUP_BORDER_COLOR,
-						pointerColor: APPCFG.POPUP_ARROW_COLOR,
-						textColor: "#ffffff",
-						offsetTop: app.data.getTourLayer().renderer.getSymbol(graphic).height / 2 + app.data.getTourLayer().renderer.getSymbol(graphic).yoffset,
-						topLeftNotAuthorizedArea: has('touch') ? [40, 180] : [30, 150],
-						mapAuthorizedWidth: MapTourHelper.isModernLayout() ? domQuery("#picturePanel").position()[0].x : -1,
-						mapAuthorizedHeight: MapTourHelper.isModernLayout() ? domQuery("#footerDesktop").position()[0].y - domQuery("#header").position()[0].h : -1,
-						visible: ! MapTourHelper.isOnMobileView() && graphic.attributes.getName() !== ""
-					});	
 			}
 			
 			//
